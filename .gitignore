@@ -1,0 +1,76 @@
+# EVA
+data/
+results/
+results*/
+human_data*/
+debug/
+vert/
+hori/
+dinox_results/
+data_final/
+
+models/
+models_pineapple/
+models_duck/
+aawr_pca_history/
+aawr_pca_history_chunk/
+A_NeurIPS_checklist/
+openpi/
+
+
+.cursor/
+.cursorignore/
+# Python
+
+*.py[cod]
+__pycache__/
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+parts/
+bin/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+venv/
+env/
+.env/
+.venv/
+ENV/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# NumPy/scientific computing
+*.npy
+*.npz
+*.pkl
+*.h5
+*.mat
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
