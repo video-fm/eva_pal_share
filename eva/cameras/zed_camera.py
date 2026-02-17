@@ -38,8 +38,10 @@ class ZedCamera:
         self.current_mode = None
         self._current_params = None
         self._extriniscs = {}
-
-        flip = sl.FLIP_MODE.ON if camera_flip_dict[self.serial_number] else sl.FLIP_MODE.OFF
+        try:
+            flip = sl.FLIP_MODE.ON if camera_flip_dict[self.serial_number] else sl.FLIP_MODE.OFF
+        except KeyError:
+            flip = sl.FLIP_MODE.OFF
         print(camera_flip_dict[self.serial_number], flip)
         self.standard_params = dict(
             depth_minimum_distance=200, depth_mode = sl.DEPTH_MODE.NEURAL, camera_resolution=sl.RESOLUTION.HD720, depth_stabilization=False, camera_fps=60, camera_image_flip=flip,
