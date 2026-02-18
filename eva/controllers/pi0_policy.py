@@ -7,7 +7,7 @@ from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from eva.utils.misc_utils import run_threaded_command, create_info_dict, print_datadict_tree
 from dataclasses import dataclass
-from add_arrow import add_arrow
+# from add_arrow import add_arrow
 
 import eva.utils.parameters as params
 
@@ -211,8 +211,8 @@ class Pi0Policy:
 
         # Extract camera images
         images = self._extract_images(observation)
-        images['left_image'] = np.array(add_arrow(images['left_image'], [(750,450), (670, 520)]))[:,:,:3]
-        images['right_image'] = np.array(add_arrow(images['right_image'], [(670, 520), (550, 450)]))[:,:,:3]
+        # images['left_image'] = np.array(add_arrow(images['left_image'], [(750,450), (670, 520)]))[:,:,:3]
+        # images['right_image'] = np.array(add_arrow(images['right_image'], [(670, 520), (550, 450)]))[:,:,:3]
         if self.policy_query_count == 0:
             for name, img in images.items():
                 if img is not None:
