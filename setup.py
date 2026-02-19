@@ -13,6 +13,7 @@ setup(
         "numpy",
         "opencv-python",
         "torch",
+        "tyro",
     ],
     # python_requires=">=3.8",
 )

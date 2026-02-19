@@ -19,6 +19,16 @@ from PIL import Image, ImageDraw
 from scipy.interpolate import splprep, splev
 
 
+def get_image_resized(img_path: str, max_size: int = 1024) -> Image.Image:
+    """Load image and resize if needed for API."""
+    img = Image.open(img_path).convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_size:
+        ratio = max_size / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+    return img
+
+
 def add_arrow(
     image: Union[str, np.ndarray, Image.Image],
     points: Sequence[Tuple[float, float]],
