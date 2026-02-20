@@ -281,6 +281,7 @@ def run_trajectory(
     randomize_reset=False,
     reset_robot=True,
     post_process=False,
+    obs_transform=None,
 ):
     if post_process:
         assert save_filepath is not None, "Must save data to post process"
@@ -312,6 +313,8 @@ def run_trajectory(
 
         # Get Observation #
         obs = env.get_observation()
+        if obs_transform is not None:
+            obs = obs_transform(obs)
         if obs_pointer is not None: # TODO : add a reset pointer to access the env
             obs_pointer.update(obs)
         obs["controller_info"] = controller_info

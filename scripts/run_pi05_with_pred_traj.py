@@ -4,6 +4,8 @@ from tqdm import tqdm
 import time
 from eva.runner import Runner
 from eva.manager import load_runner
+import os
+import json
 # run_pi05.py -n 1 -c pi0_policy
                 
 def evaluate_policy(runner: Runner, controller=None, n_traj=1, practice=False):
@@ -16,6 +18,7 @@ def evaluate_policy(runner: Runner, controller=None, n_traj=1, practice=False):
         new_instruction = input("Enter new instruction (press Enter to keep current): ").strip()
         if new_instruction:
             runner.controller.set_instruction(new_instruction)
+       
         
         # Ask for horizon
         current_horizon = getattr(runner.controller, 'open_loop_horizon', 'None')
@@ -47,7 +50,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--n_traj", type=int, default=10)
     parser.add_argument("--practice", action="store_true")
+    parser.add_argument("--traj_version", type=int, choices=[0, 1], default=0)
+    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument("--gemini-model", default="gemini-robotics-er-1.5-preview")
+    parser.add_argument("--data-path", type=str, default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
+    parser.add_argument("--instruction_cache_path", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "preprocess_cache", "instruction_cache.json"))
+    
     args = parser.parse_args()
+    os.makedirs(args.data_path, exist_ok=True)
+    os.makedirs(os.path.join(args.data_path, "preprocess_cache"), exist_ok=True)
+
+    if os.path.exists(args.instruction_cache_path):
+        with open(args.instruction_cache_path, "r") as f:
+            instruction_cache = json.load(f)
+    else:
+        instruction_cache = {}
 
     runner = load_runner(manager=False, controller="pi0_policy", record_depth=False, \
                          record_pcd=False, post_process=True)
