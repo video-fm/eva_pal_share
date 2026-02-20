@@ -2,7 +2,7 @@
 import argparse
 from tqdm import tqdm
 import time
-from eva.runner import Runner
+from eva.runner_augmented import Runner
 from eva.manager import load_runner
 import os
 import json
