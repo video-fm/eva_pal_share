@@ -47,7 +47,7 @@ class RunnerAugmented(Runner):
         gemini_model="gemini-robotics-er-1.5-preview",
         plan_freq=10,
         max_plan_count=10,
-        save_trajectory_img_path=None,
+        save_trajectory_img_dir=None,
         augment_camera_ids = ["varied_camera_1"],
         **kwargs,
     ):
@@ -60,7 +60,7 @@ class RunnerAugmented(Runner):
         self._gemini_model = gemini_model
         self.steps = []
         self.step = 0
-        self.save_trajectory_img_path = save_trajectory_img_path
+        self.save_trajectory_img_dir = save_trajectory_img_dir
         self.augment_camera_ids = augment_camera_ids
         
         # TODO: replan for each 10 roll outs has been executed
@@ -132,7 +132,7 @@ class RunnerAugmented(Runner):
         Args:
             curr_image: numpy array (H×W×C) or PIL Image from camera.
             gemini_model_name: Model for object detection (default: self._gemini_model).
-            save_trajectory_img_path: Optional path to save visualization.
+            save_trajectory_img_dir: Optional dir to save visualization.
 
         Returns:
             Trajectory dict with "trajectory" key (list of [x,y] points), or None on failure.
@@ -178,11 +178,12 @@ class RunnerAugmented(Runner):
             model_name=self._gpt_model,
         )
 
-        if self.save_trajectory_img_path is not None and trajectory and "trajectory" in trajectory:
+        if self.save_trajectory_img_dir is not None and trajectory and "trajectory" in trajectory:
             pts = [tuple(p) for p in trajectory["trajectory"]]
+            save_trajectory_img_path = os.path.join(self.save_trajectory_img_dir, f"{self.step:05d}_trajectory.jpg")
             if len(pts) >= 2:
                 img_with_arrow = add_arrow(img, pts, color="red", line_width=3)
-                img_with_arrow.convert("RGB").save(self.save_trajectory_img_path)
+                img_with_arrow.convert("RGB").save(save_trajectory_img_path)
 
         self.pred_traj = trajectory
     
