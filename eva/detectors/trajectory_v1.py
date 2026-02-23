@@ -19,6 +19,7 @@ import base64
 from eva.detectors.traj_vis_utils import add_arrow, get_image_resized
 
 
+
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 google_client = genai.Client(api_key=GOOGLE_API_KEY)
 
@@ -151,6 +152,8 @@ You are a spatial reasoning and motion planning assistant for tabletop manipulat
   }}
 """
 
+
+
 step_completion_prompt_template = """
 You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
 
@@ -165,6 +168,57 @@ Return ONLY a single valid JSON object (no extra text). Use this format:
 }}
 """
 
+trajectory_generation_prompt_template_with_target_location = """
+You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
+
+   INPUT: 
+   - Task instruction: string
+   - Image: an image of the tabletop with the objects in the scene.
+   - Image height and width: int, int
+   - target object to manipulate location: (x, y) 
+   - end point: (x, y) # the given target location.
+   
+   GOAL: Predict a safe 2D movement for the target object on the tabletop and output a trajectory arrow. 
+
+   REQUIREMENTS: 
+   1. Interpret spatial meaning of the instruction (e.g., right, left, toward object, away from edge, etc.). 
+   2. Note that the movement should be relative to the aspect of the robot, not the camera.
+   3. Detect potential risks such as: - Falling off table / outside workspace - Collision with obstacles 
+   4. Choose a **safe reachable target point** that satisfies the instruction while staying on the table.
+   5. Prefer keeping object inside central tabletop region when possible. 
+   6. The trajectory shall be a multi-step trajectory, with at least 2 points.
+   
+    TRAJECTORY RULES:
+   - Use at least 3 points
+   - First point: The target object location to manipulate.
+   - Final point: settle at the target location.
+  
+   OUTPUT: 
+   - reasoning: brief explanation of safety + direction 
+   - start point: (x, y) # input start point
+   - target location: (x, y) # input goal location
+   - trajectory: a list of points [(x, y), (x, y), ...] # safe predicted trajectory from start point to target location
+
+  DO NOT:
+  - Use camera/image left-right
+  - Simply subtract a constant from x without reasoning
+
+  Now process this task:
+  Task: {task}
+  Image height: {height}
+  Image width: {width}
+  The object to manipulate is {manipulating_object} at: {manipulating_object_point}
+  The related object to the target position is {target_related_object}, which located at: {target_related_object_point}
+  We want to move the manipulating object to the target location: {target_location}, which is at: {target_location_point}
+  
+  Return ONLY a single valid JSON object (no extra text). Use this format:
+  {{
+    "reasoning": "...",
+    "start_point": [x, y],
+    "end_point": [x, y],
+    "trajectory": [[x, y], [x, y], ...]
+  }}
+"""
 
 def encode_image(img_path: str) -> str:
     """Convert image file to base64 string."""
@@ -277,7 +331,20 @@ def query_step_completion(
     prompt = step_completion_prompt_template.format(task=step)
     response = client.chat.completions.create(
         model=model_name,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user",
+                   "content": [
+                    {"type": "text", "text": prompt},
+                    *[
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_encoded}"
+                            },
+                        }
+                        for img_encoded in img_encoded_list
+                    ],
+                  ]}],
+        
         temperature=0.0,
         max_tokens=200,
     )
@@ -298,18 +365,32 @@ def query_trajectory(
     target_related_object_point: str,
     target_location: str,
     model_name: str = "gpt-4o-mini",
+    target_location_point: str = None,
 ) -> str:
 
-    prompt = trajectory_generation_prompt_template.format(
-        task=task,
-        height=img.height,
-        width=img.width,
-        manipulating_object=manipulating_object,
-        manipulating_object_point=manipulating_object_point,
-        target_related_object=target_related_object,
-        target_related_object_point=target_related_object_point,
-        target_location=target_location,
-    )
+    if target_location_point is None:
+        prompt = trajectory_generation_prompt_template.format(
+            task=task,
+            height=img.height,
+            width=img.width,
+            manipulating_object=manipulating_object,
+            manipulating_object_point=manipulating_object_point,
+            target_related_object=target_related_object,
+            target_related_object_point=target_related_object_point,
+            target_location=target_location,
+        )
+    else: 
+        prompt = trajectory_generation_prompt_template_with_target_location.format(
+          task=task,
+          height=img.height,
+          width=img.width,
+          manipulating_object=manipulating_object,
+          manipulating_object_point=manipulating_object_point,
+          target_related_object=target_related_object,
+          target_related_object_point=target_related_object_point,
+          target_location=target_location,
+          target_location_point=target_location_point,
+      )
 
     response = client.chat.completions.create(
         model=model_name,
@@ -337,6 +418,13 @@ def query_trajectory(
     return json_output
 
 
+def get_sorted_frame_paths(img_dir: str) -> list[str]:
+    """Return numerically sorted paths for raw frames (e.g. 000.jpg, 001.jpg, …)."""
+    filenames = [f for f in os.listdir(img_dir) if re.match(r"^\d{3}\.jpg$", f)]
+    filenames.sort()
+    return [os.path.join(img_dir, f) for f in filenames]
+
+
 def parse_args():
     
     p = argparse.ArgumentParser()
@@ -345,7 +433,9 @@ def parse_args():
     p.add_argument("--test-pipeline-dir", default="/home/jianih/research/STSG-ICL/data/ICL_VLA_small/test_traj_prediction")
     p.add_argument("--img-path", default=None)
     p.add_argument("--save-resized-img-path", default=None)
-    p.add_argument("--save-trajectory-img-path", default=None)
+    p.add_argument("--save-trajectory-img-path", default="/home/jianih/research/STSG-ICL/data/ICL_VLA_small/stsg_visualizations")
+    p.add_argument("--check-interval", type=int, default=20,
+                   help="Check step completion every N frames")
     
     return p.parse_args()
 
@@ -354,14 +444,13 @@ if __name__ == "__main__":
     args = parse_args()
     
     caption_dir_lookup = {
-        "Move the orange juice to the left.": "2025_08_29_move_orange_juice_to_left_human/Fri_Aug_29_10_24_28_2025",
-        "Place pineapple in bowl": "2025_08_28_place_pineapple_in_bowl_human/Thu_Aug_28_16_06_09_2025",
-        "Place watermelom in bowl": "2025_08_28_place_watermelon_in_bowl_human/Thu_Aug_28_16_14_14_2025",
-        "Stack cups in green, red, yellow order": "2025_10_07_stack_cups_in_green_red_yellow_order_human/Tue_Oct_07_17_29_58_2025",
+        # "Move the orange juice to the left.": "2025_08_29_move_orange_juice_to_left_human/Fri_Aug_29_10_24_28_2025",
+        # "Place pineapple in bowl": "2025_08_28_place_pineapple_in_bowl_human/Thu_Aug_28_16_06_09_2025",
+        # "Place watermelom in bowl": "2025_08_28_place_watermelon_in_bowl_human/Thu_Aug_28_16_14_14_2025",
+        "Stack cups in green, red, yellow order": "2025_10_07_stack_the_cups_in_green_red_yellow_order/Tue_Oct_07_17_29_58_2025",
     }
     
     default_img_dir_template = "/home/jianih/research/STSG-ICL/data/ICL_VLA_small/test/L2_out_of_domain/{}/recordings/frames/varied_camera_1/"
-    img_encoded = encode_image(args.save_resized_img_path)
 
     client = OpenAI()
 
@@ -369,47 +458,131 @@ if __name__ == "__main__":
     for caption, img_dir in caption_dir_lookup.items():
       
         default_img_dir = default_img_dir_template.format(img_dir)
-        default_img_path = os.path.join(default_img_dir, "000.jpg")
-        default_resized_img_path = os.path.join(default_img_dir, "000_resized.jpg")
-        default_trajectory_img_path = os.path.join(default_img_dir, "000_trajectory.jpg")
-        
-        img = get_image_resized(default_img_path)
-        img.save(default_resized_img_path)
-        
+        frame_paths = get_sorted_frame_paths(default_img_dir)
+
         target = query_target_objects(client, caption, model=args.model)
+        steps = target["steps"]
 
-        for step in target["steps"]:
-            manipulating_object = step["manipulating_object"]
-            target_related_object = step["target_related_object"]
-            target_location = step["target_location"]
+        step_idx = 0
+        current_step = steps[step_idx]
+        current_trajectory = None
+        current_end_point = None
+        img_history = []
+        img_encoded_history = []
 
-            target_objects = list(set([manipulating_object, target_related_object]))
+        for frame_idx, frame_path in enumerate(frame_paths):
+            img = get_image_resized(frame_path)
+            img_encoded = encode_pil_image(img)
+            img_history.append(img)
+            img_encoded_history.append(img_encoded)
 
-            object_locations = query_target_location(
-                img, target_objects, model_name=args.gemini_model, visualize=False
-            )
-            
-            manipulating_object_point = object_locations[manipulating_object]
-            target_related_object_point = object_locations[target_related_object]
-            
-            trajectory = query_trajectory(client, 
-                                          img=img,
-                                          img_encoded=img_encoded, 
-                                          task=step["step"], 
-                                          manipulating_object=step["manipulating_object"], 
-                                          manipulating_object_point=manipulating_object_point,
-                                          target_related_object=step["target_related_object"], 
-                                          target_related_object_point=target_related_object_point,
-                                          target_location=step["target_location"], 
-                                          model_name=args.model)
-            
-            if args.save_trajectory_img_path is not None:
-                pts = [tuple(p) for p in trajectory["trajectory"]]
-                if len(pts) >= 2:
-                    img_with_arrow = add_arrow(img, pts, color="red", line_width=3)
-                    img_with_arrow.convert("RGB").save(default_trajectory_img_path)
-            
-            results.append(trajectory)
+            if current_trajectory is None:
+                manipulating_object = current_step["manipulating_object"]
+                target_related_object = current_step["target_related_object"]
+                target_objects = list(set([manipulating_object, target_related_object]))
 
+                object_locations = query_target_location(
+                    img, target_objects, model_name=args.gemini_model, visualize=False
+                )
+
+                manipulating_object_point = object_locations[manipulating_object]
+                target_related_object_point = object_locations[target_related_object]
+
+                current_trajectory = query_trajectory(
+                    client,
+                    img=img,
+                    img_encoded=img_encoded,
+                    task=current_step["step"],
+                    manipulating_object=manipulating_object,
+                    manipulating_object_point=manipulating_object_point,
+                    target_related_object=target_related_object,
+                    target_related_object_point=target_related_object_point,
+                    target_location=current_step["target_location"],
+                    model_name=args.model,
+                )
+                current_end_point = current_trajectory["end_point"]
+
+                if args.save_trajectory_img_path is not None:
+                    pts = [tuple(p) for p in current_trajectory["trajectory"]]
+                    if len(pts) >= 2:
+                        traj_save_path = os.path.join(
+                            default_img_dir,
+                            f"{os.path.splitext(os.path.basename(frame_path))[0]}_trajectory.jpg",
+                        )
+                        img_with_arrow = add_arrow(img, pts, color="red", line_width=3)
+                        img_with_arrow.convert("RGB").save(traj_save_path)
+
+            if len(img_history) >= args.check_interval and len(img_history) % args.check_interval == 0:
+                completion = query_step_completion(
+                    client, img_history, img_encoded_history,
+                    step=current_step["step"], model_name=args.model,
+                )
+
+                print(f"[frame {frame_idx}] step {step_idx} "
+                      f"(\"{current_step['step']}\"): is_complete={completion['is_complete']}")
+
+                if completion["is_complete"]:
+                    results.append({
+                        "caption": caption,
+                        "step": current_step,
+                        "trajectory": current_trajectory,
+                        "completed_at_frame": frame_idx,
+                    })
+
+                    step_idx += 1
+                    if step_idx >= len(steps):
+                        break
+
+                    current_step = steps[step_idx]
+                    current_trajectory = None
+                    current_end_point = None
+
+                    img_history = [img]
+                    img_encoded_history = [img_encoded]
+
+                else:
+                    manipulating_object = current_step["manipulating_object"]
+                    target_related_object = current_step["target_related_object"]
+                    target_objects = list(set([manipulating_object, target_related_object]))
+
+                    object_locations = query_target_location(
+                        img, target_objects, model_name=args.gemini_model, visualize=False
+                    )
+
+                    manipulating_object_point = object_locations[manipulating_object]
+                    target_related_object_point = object_locations[target_related_object]
+
+                    current_trajectory = query_trajectory(
+                        client,
+                        img=img,
+                        img_encoded=img_encoded,
+                        task=current_step["step"],
+                        manipulating_object=manipulating_object,
+                        manipulating_object_point=manipulating_object_point,
+                        target_related_object=target_related_object,
+                        target_related_object_point=target_related_object_point,
+                        target_location=current_step["target_location"],
+                        model_name=args.model,
+                        target_location_point=current_end_point,
+                    )
+
+                    if args.save_trajectory_img_path is not None:
+                        pts = [tuple(p) for p in current_trajectory["trajectory"]]
+                        if len(pts) >= 2:
+                            traj_save_path = os.path.join(
+                                default_img_dir,
+                                f"{os.path.splitext(os.path.basename(frame_path))[0]}_trajectory.jpg",
+                            )
+                            img_with_arrow = add_arrow(img, pts, color="red", line_width=3)
+                            img_with_arrow.convert("RGB").save(traj_save_path)
+
+        if current_trajectory is not None:
+            results.append({
+                "caption": caption,
+                "step": current_step,
+                "trajectory": current_trajectory,
+                "completed_at_frame": None,
+            })
+
+    print(json.dumps(results, indent=2))
     print("Done")
-
