@@ -23,7 +23,7 @@ def evaluate_policy(runner: RunnerAugmented, controller=None, n_traj=1, practice
         if current_instr:
             runner.preprocess_instruction(current_instr)
             if runner.steps:
-                runner.controller.current_instruction = runner.steps[0]["step"]
+                runner.controller.set_instruction(runner.steps[0]["step"])
         
         # Ask for horizon
         current_horizon = getattr(runner.controller, 'open_loop_horizon', 'None')

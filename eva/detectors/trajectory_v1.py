@@ -270,7 +270,7 @@ You are a spatial reasoning and motion planning assistant for tabletop manipulat
 
 We are currently performing this step in the task: {task}.
 
-Based on the previous images and the current image, please determine if the step is complete.
+Based on this image, please determine if the step is complete.
 
 Return ONLY a single valid JSON object (no extra text). Use this format:
 {{
@@ -288,7 +288,7 @@ step_completion_schema = {
             "reasoning": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Brief justification based on visual evidence across previous and current images."
+                "description": "Brief justification based on visual evidence in the image."
             },
             "is_complete": {
                 "type": "boolean",
@@ -458,7 +458,7 @@ def query_step_completion(
   img_list,
   step: str,
   model_name: str = "gemini-robotics-er-1.5-preview",
-  max_images: int = 1,
+  max_images: int = 3,
 ) -> dict:
 
     if len(img_list) > max_images:

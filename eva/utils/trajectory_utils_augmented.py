@@ -15,7 +15,6 @@ from eva.remote_timer import RemoteTimer
 
 timer = RemoteTimer()
 
-
 def run_trajectory_augmented(
     env,
     controller,

@@ -239,9 +239,10 @@ class RunnerAugmented(Runner):
 
         step_data = self.steps[self.step]
         return query_step_completion(
-            self.img_history,
+            [self.img_history[-1]],
             step=step_data["step"],
             model_name=self._gemini_model,
+            max_images=1,
         )
     
     def get_pred_traj(
@@ -283,11 +284,21 @@ class RunnerAugmented(Runner):
         )
         self._last_object_locations = object_locations
         if object_locations is None:
+            yellow_print("[get_pred_traj] query_target_location returned None")
             return None
 
         manipulating_object_point = object_locations.get(manipulating_object)
         target_related_object_point = object_locations.get(target_related_object)
         if manipulating_object_point is None or target_related_object_point is None:
+            missing = []
+            if manipulating_object_point is None:
+                missing.append(manipulating_object)
+            if target_related_object_point is None:
+                missing.append(target_related_object)
+            yellow_print(
+                f"[get_pred_traj] Object(s) not found: {missing}. "
+                f"Detected: {list(object_locations.keys())}"
+            )
             return None
 
         img_encoded = encode_pil_image(img)
@@ -395,53 +406,55 @@ class RunnerAugmented(Runner):
             self.img_encoded_history.append(encode_pil_image(pil_img))
 
             if self.steps and self.step < len(self.steps):
-                self.controller.current_instruction = self.steps[self.step]["step"]
+                self.controller.set_instruction(self.steps[self.step]["step"])
 
             completion = None
-            if self.pred_traj is not None:
+            if len(self.img_history) >= 1:
                 completion = self.check_step_completion()
 
-                if completion and completion.get("is_complete", False):
-                    yellow_print(
-                        f"[augmented] Step {self.step} "
-                        f"(\"{self.steps[self.step]['step']}\") completed at env step {step_num}"
-                    )
-                    self.step += 1
-                    self._reset_step_state()
+            if completion and completion.get("is_complete", False):
+                yellow_print(
+                    f"[augmented] Step {self.step} "
+                    f"(\"{self.steps[self.step]['step']}\") completed at env step {step_num}"
+                )
+                self.step += 1
+                self._reset_step_state()
 
-                    if self.step >= len(self.steps):
-                        yellow_print("[augmented] All steps completed!")
-                        if run_save_dir is not None:
-                            query_log = {
-                                "step_num": step_num,
-                                "plan_count": plan_count + 1,
-                                "step_index": self.step,
-                                "step_description": None,
-                                "completion_check": completion,
-                                "object_locations": {},
-                                "trajectory_raw": None,
-                                "trajectory_rescaled": None,
-                                "all_steps_completed": True,
-                            }
-                            query_path = os.path.join(run_save_dir, f"queries_step_{step_num:03d}.json")
-                            with open(query_path, "w") as f:
-                                json.dump(query_log, f, indent=2)
-                        return None
+                if self.step >= len(self.steps):
+                    yellow_print("[augmented] All steps completed!")
+                    if run_save_dir is not None:
+                        query_log = {
+                            "step_num": step_num,
+                            "plan_count": plan_count + 1,
+                            "step_index": self.step,
+                            "step_description": None,
+                            "completion_check": completion,
+                            "object_locations": {},
+                            "trajectory_raw": None,
+                            "trajectory_rescaled": None,
+                            "all_steps_completed": True,
+                        }
+                        query_path = os.path.join(run_save_dir, f"queries_step_{step_num:03d}.json")
+                        with open(query_path, "w") as f:
+                            json.dump(query_log, f, indent=2)
+                    return None
 
-                    self.controller.current_instruction = self.steps[self.step]["step"]
-                    pil_img_new, _ = self._image_to_pil(img)
-                    self.img_history = [pil_img_new]
-                    self.img_encoded_history = [encode_pil_image(pil_img_new)]
+                self.controller.set_instruction(self.steps[self.step]["step"])
+                self.controller.reset_state()
+                pil_img_new, _ = self._image_to_pil(img)
+                self.img_history = [pil_img_new]
+                self.img_encoded_history = [encode_pil_image(pil_img_new)]
 
-                    self.get_pred_traj(img)
-                else:
+                self.get_pred_traj(img)
+            else:
+                if self.pred_traj is not None:
                     yellow_print(
                         f"[augmented] Step {self.step} not complete, "
                         f"re-planning at env step {step_num}"
                     )
                     self.get_pred_traj(img, target_location_point=self.current_end_point)
-            else:
-                self.get_pred_traj(img)
+                else:
+                    self.get_pred_traj(img)
 
             if run_save_dir is not None:
                 query_log = {
@@ -508,17 +521,12 @@ class RunnerAugmented(Runner):
         def _obs_transform(obs):
             transformed = self.annotate_observation(deepcopy(obs))
             annotated_ids = transformed.pop("_annotated_cameras", [])
-            if not _logged_first[0]:
+            if not _logged_first[0] and len(annotated_ids) >= 1:
                 all_cams = list(transformed.get("image", {}).keys())
                 raw_ids = [c for c in all_cams if c not in annotated_ids]
                 yellow_print(
                     f"[obs_transform] annotated={annotated_ids}, raw={raw_ids}"
                 )
-                if len(annotated_ids) != 1:
-                    yellow_print(
-                        f"[obs_transform] WARNING: expected 1 annotated camera, "
-                        f"got {len(annotated_ids)} (pred_traj may be missing)"
-                    )
                 _logged_first[0] = True
             return transformed
 
