@@ -37,6 +37,11 @@ camera_flip_dict = {
     varied_camera_2_id: True,
 }
 
+camera_string_to_id_dict = {
+    camera_type_to_string_dict[v]: k
+    for k, v in camera_type_dict.items()
+}
+
 def get_camera_type(cam_id):
     if cam_id not in camera_type_dict:
         return None

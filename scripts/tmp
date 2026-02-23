@@ -1,0 +1,2 @@
+[obs_transform] annotated=[], raw=['14436910_left', '14436910_right', '25455306_left', '25455306_right', '26368109_left', '26368109_right']
+[obs_transform] WARNING: expected 1 annotated camera, got 0 (pred_traj may be missing)

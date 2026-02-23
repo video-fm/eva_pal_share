@@ -40,7 +40,7 @@ def init(
     gpt_model="gpt-4o-mini",
     gemini_model="gemini-robotics-er-1.5-preview",
     plan_freq=10,
-    max_plan_count=10,
+    max_plan_count=20,
     save_trajectory_img_dir=None,
     augment_camera_ids=None,
 ):
@@ -74,7 +74,7 @@ def start_runner(
     gpt_model="gpt-4o-mini",
     gemini_model="gemini-robotics-er-1.5-preview",
     plan_freq=10,
-    max_plan_count=10,
+    max_plan_count=20,
     save_trajectory_img_dir=None,
     augment_camera_ids=None,
 ):

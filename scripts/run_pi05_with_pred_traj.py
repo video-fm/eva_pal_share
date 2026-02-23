@@ -22,7 +22,9 @@ def evaluate_policy(runner: RunnerAugmented, controller=None, n_traj=1, practice
 
         if current_instr:
             runner.preprocess_instruction(current_instr)
-
+            if runner.steps:
+                runner.controller.current_instruction = runner.steps[0]["step"]
+        
         # Ask for horizon
         current_horizon = getattr(runner.controller, 'open_loop_horizon', 'None')
         print(f"Current horizon: {current_horizon}")
@@ -51,13 +53,15 @@ def evaluate_policy(runner: RunnerAugmented, controller=None, n_traj=1, practice
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--n_traj", type=int, default=10)
+    parser.add_argument("-n", "--n_traj", type=int, default=5)
     parser.add_argument("--practice", action="store_true")
     parser.add_argument("--traj_version", type=int, choices=[0, 1], default=1)
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--gemini-model", default="gemini-robotics-er-1.5-preview")
     parser.add_argument("--data-path", type=str, default="/home/franka/eva_jiani/data/test_traj")
     parser.add_argument("--instruction_cache_path", default=None)
+    parser.add_argument("--max-plan-count", type=int, default=20,
+                        help="Maximum number of replanning calls per trajectory")
     parser.add_argument("--no-overlay", action="store_true",
                         help="Disable trajectory overlay on model input (planning images are still saved)")
     
@@ -82,6 +86,7 @@ if __name__ == "__main__":
         gpt_model=args.model,
         gemini_model=args.gemini_model,
         save_trajectory_img_dir=args.data_path,
+        max_plan_count=args.max_plan_count,
     )
     runner.instruction_cache = instruction_cache
     runner.instruction_cache_path = args.instruction_cache_path

@@ -82,7 +82,7 @@ def _run_v1(args, caption_to_image, img_dir, resized_dir, traj_dir):
         base_save_path = os.path.join(traj_dir, img_filename.replace(".jpg", "_traj"))
         img_encoded = encode_pil_image(img)
 
-        target = query_target_objects(client, caption, model=args.model)
+        target = query_target_objects(client, caption, model=args.model, img_encoded=img_encoded)
         for step_idx, step in enumerate(target["steps"]):
             manipulating_object = step["manipulating_object"]
             target_related_object = step["target_related_object"]

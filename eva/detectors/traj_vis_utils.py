@@ -35,7 +35,7 @@ def add_arrow(
     image: Union[str, np.ndarray, Image.Image],
     points: Sequence[Tuple[float, float]],
     color: Union[str, Tuple[int, ...]] = "red",
-    line_width: int = 3,
+    line_width: int = 2,
     arrow_head_length: float = 20.0,
     arrow_head_angle: float = 30.0,
     num_interpolated: int = 300,

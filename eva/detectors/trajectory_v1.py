@@ -33,9 +33,11 @@ Rules:
 - "target_location" must describe where that object should be placed, applied, or moved (including relations like "to the left of the banana" or "onto the blue plate").
 - If multiple objects are mentioned, choose the single primary object that is directly manipulated.
 - If no clear target location is given, use the empty string "" for "target_location".
-
+- Notice that you are a robot and can only manipulate one object at a time. Do NOT make a plan that needs to manipulate "stacked objects".
+ 
 Example 1
 Caption: Add sprinkles to the Coke in the designated container.
+Reasoning: The robot shall pick up the sprinkles and add them to the Coke in the designated container.
 Output:
 {{
   "steps": [
@@ -50,6 +52,7 @@ Output:
 
 Example 2
 Caption: Place the pineapple to the left of the banana, ensuring they are positioned neatly.
+Reasoning: The robot shall pick up the pineapple and place it to the left of the banana. 
 Output:
 {{
   "steps": [
@@ -63,8 +66,32 @@ Output:
 }}
 
 Example 3
-Caption: Move the pineapple to the left.
+Caption: Place the toy cat to the other side of the pineapple, ensuring they are positioned neatly.
+Reasoning: 
+Currently the toy cat is on the left side of the pineapple, 
+so the robot shall pick up the toy cat and place it to the right side of the pineapple.
 Output:
+{{
+  "steps": [
+    {{
+      "step": "Place the toy cat to the right side of the pineapple.",
+      "manipulating_object": "toy cat",
+      "target_location": "left of the pineapple",
+      "target_related_object": "pineapple"
+    }}
+  ]
+}}
+
+
+Example 4
+Caption: Stack the cup from top to bottom of red, green, blue.
+Reasoning: This is a stacking task, and the robot shall only manipulate one cup at a time.
+Aviod to manipulate "stacked objects".
+Therefore, we construct the stack from bottom to top.
+First, The robot shall pick up the green cup firstand stack it to the blue cup as the first step.
+Then, the robot shall pick up the red cup and stack it to the green cup as the second step.
+
+Output: 
 {{
   "steps": [
     {{
@@ -99,6 +126,51 @@ Return ONLY a single valid JSON object (no extra text). Use this format:
   ]
 }}
 """
+
+prompt_target_schema = {
+    "name": "robot_plan_steps",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "steps": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "step": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Natural language description of the step."
+                        },
+                        "manipulating_object": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Single primary physical object the robot manipulates."
+                        },
+                        "target_location": {
+                            "type": "string",
+                            "description": "Where the manipulating_object should be moved/placed/applied. Use empty string if not given."
+                        },
+                        "target_related_object": {
+                            "type": "string",
+                            "description": "The object used as a spatial/semantic reference for target_location (e.g., banana). Use empty string if none/unknown."
+                        }
+                    },
+                    "required": [
+                        "step",
+                        "manipulating_object",
+                        "target_location",
+                        "target_related_object"
+                    ]
+                }
+            }
+        },
+        "required": ["steps"]
+    }
+}
 
 trajectory_generation_prompt_template = """
 You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
@@ -152,7 +224,46 @@ You are a spatial reasoning and motion planning assistant for tabletop manipulat
   }}
 """
 
-
+trajectory_schema = {
+    "name": "tabletop_trajectory",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "reasoning": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Brief explanation of safety + direction reasoning (robot-centric)."
+            },
+            "start_point": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Start (x, y) in pixel coordinates."
+            },
+            "end_point": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Predicted safe target (x, y) in pixel coordinates."
+            },
+            "trajectory": {
+                "type": "array",
+                "minItems": 3,
+                "description": "List of (x, y) points from start to end. At least 3 points.",
+                "items": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2
+                }
+            }
+        },
+        "required": ["reasoning", "start_point", "end_point", "trajectory"]
+    }
+}
 
 step_completion_prompt_template = """
 You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
@@ -167,6 +278,26 @@ Return ONLY a single valid JSON object (no extra text). Use this format:
   "is_complete": true/false
 }}
 """
+
+step_completion_schema = {
+    "name": "step_completion",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "reasoning": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Brief justification based on visual evidence across previous and current images."
+            },
+            "is_complete": {
+                "type": "boolean",
+                "description": "True if the specified step is completed in the current state; otherwise false."
+            }
+        },
+        "required": ["reasoning", "is_complete"]
+    }
+}
 
 trajectory_generation_prompt_template_with_target_location = """
 You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
@@ -265,20 +396,28 @@ def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-roboti
     return parse_json(image_response.text)
 
 
-
-def query_target_objects(client: OpenAI, caption: str, model: str = "gpt-4o-mini") -> list[str]:
+def query_target_objects(client: OpenAI, caption: str, model: str = "gpt-4o-mini", img_encoded: str | None = None) -> list[str]:
     """Query ChatGPT to extract target objects from a caption."""
     prompt = prompt_target_template.format(caption=caption)
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    if img_encoded is not None:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img_encoded}"},
+        })
     response = client.chat.completions.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": content}],
         temperature=0.0,
-        max_tokens=150,
+        max_tokens=1000,
+        response_format={
+        "type": "json_schema",
+        "json_schema": prompt_target_schema
+       },
     )
-    text = response.choices[0].message.content.strip()
-    text = parse_json(text)
-    return json.loads(text)
-
+    data = json.loads(response.choices[0].message.content)
+    return data
+    
 
 def query_target_location(img, queries: list[str], model_name: str = "gemini-robotics-er-1.5-preview", visualize: bool = False) -> dict[str, tuple[float, float]]:
     
@@ -316,43 +455,34 @@ def query_target_location(img, queries: list[str], model_name: str = "gemini-rob
     return object_locations
 
 def query_step_completion(
-  client: OpenAI, 
-  img_list, 
-  img_encoded_list, 
-  step: str, 
-  model_name: str = "gpt-4o-mini",
-  max_images: int = 3) -> dict:
-  
+  img_list,
+  step: str,
+  model_name: str = "gemini-robotics-er-1.5-preview",
+  max_images: int = 1,
+) -> dict:
+
     if len(img_list) > max_images:
-        indices = np.linspace(0, len(img_list) - 1, max_images, dtype=int)
+        earlier = np.linspace(0, len(img_list) - 2, max_images - 1, dtype=int).tolist()
+        indices = earlier + [len(img_list) - 1]
         img_list = [img_list[i] for i in indices]
-        img_encoded_list = [img_encoded_list[i] for i in indices]
 
     prompt = step_completion_prompt_template.format(task=step)
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[{"role": "user",
-                   "content": [
-                    {"type": "text", "text": prompt},
-                    *[
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{img_encoded}"
-                            },
-                        }
-                        for img_encoded in img_encoded_list
-                    ],
-                  ]}],
-        
-        temperature=0.0,
-        max_tokens=200,
+    config = types.GenerateContentConfig(
+        temperature=0,
+        thinking_config=types.ThinkingConfig(thinking_budget=100),
     )
-    
-    text = response.choices[0].message.content.strip()
-    text = parse_json(text)
-    json_output = json.loads(text)
-    return json_output
+
+    contents = list(img_list) + [prompt]
+    response = google_client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config,
+    )
+
+    print(response.text)
+    json_output = parse_json(response.text)
+    data = json.loads(json_output)
+    return data
 
 def query_trajectory(
     client: OpenAI,
@@ -409,13 +539,15 @@ def query_trajectory(
             }
         ],
         temperature=0.0,
-        max_tokens=200,
+        max_tokens=1000,
+        response_format={
+        "type": "json_schema",
+        "json_schema": trajectory_schema
+    }
     )
 
-    text = response.choices[0].message.content.strip()
-    text = parse_json(text)
-    json_output = json.loads(text)
-    return json_output
+    data = json.loads(response.choices[0].message.content)
+    return data
 
 
 def get_sorted_frame_paths(img_dir: str) -> list[str]:
@@ -460,7 +592,12 @@ if __name__ == "__main__":
         default_img_dir = default_img_dir_template.format(img_dir)
         frame_paths = get_sorted_frame_paths(default_img_dir)
 
-        target = query_target_objects(client, caption, model=args.model)
+        first_img_encoded = None
+        if frame_paths:
+            first_img = get_image_resized(frame_paths[0])
+            first_img_encoded = encode_pil_image(first_img)
+
+        target = query_target_objects(client, caption, model=args.model, img_encoded=first_img_encoded)
         steps = target["steps"]
 
         step_idx = 0
@@ -514,8 +651,8 @@ if __name__ == "__main__":
 
             if len(img_history) >= args.check_interval and len(img_history) % args.check_interval == 0:
                 completion = query_step_completion(
-                    client, img_history, img_encoded_history,
-                    step=current_step["step"], model_name=args.model,
+                    img_history,
+                    step=current_step["step"], model_name=args.gemini_model,
                 )
 
                 print(f"[frame {frame_idx}] step {step_idx} "

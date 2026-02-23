@@ -96,7 +96,8 @@ def run_trajectory_augmented(
         if should_analyse:
             yellow_print(
                 f"[augmented] Running analysis at step {num_steps} "
-                f"(plan {plan_count + 1}/{max_plan_count})"
+                f"(plan {plan_count + 1}/{max_plan_count}): "
+                f"{getattr(controller, 'current_instruction', '')}"
             )
             analysis_result = analysis_fn(obs, num_steps, plan_count)
             plan_count += 1
