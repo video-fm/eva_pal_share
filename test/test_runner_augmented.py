@@ -12,11 +12,11 @@ chain (spacemouse, polymetis, pi0, aruco, etc.) is never triggered.
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
-from copy import deepcopy
 
 import numpy as np
 from PIL import Image
@@ -92,7 +92,7 @@ def _make_runner(**overrides):
         gemini_model="gemini-test",
         plan_freq=10,
         max_plan_count=10,
-        save_trajectory_img_path=None,
+        save_trajectory_img_dir=None,
         augment_camera_ids=["varied_camera_1"],
     )
     defaults.update(overrides)
@@ -251,33 +251,67 @@ class TestImageToPil(unittest.TestCase):
         runner = _make_runner()
         arr = frames.next()
         h, w = arr.shape[:2]
-        pil = runner._image_to_pil(arr, max_size=max(w, h))
+        pil, orig_size = runner._image_to_pil(arr, max_size=max(w, h))
         self.assertIsInstance(pil, Image.Image)
         self.assertEqual(pil.size, (w, h))
+        self.assertEqual(orig_size, (w, h))
 
     def test_from_pil_image(self):
         runner = _make_runner()
         img = Image.fromarray(frames.next())
-        pil = runner._image_to_pil(img)
+        pil, orig_size = runner._image_to_pil(img)
         self.assertIsInstance(pil, Image.Image)
         self.assertEqual(pil.mode, "RGB")
 
     def test_resizes_large_image(self):
         runner = _make_runner()
         arr = frames.next()
-        pil = runner._image_to_pil(arr, max_size=128)
+        h, w = arr.shape[:2]
+        pil, orig_size = runner._image_to_pil(arr, max_size=128)
         self.assertLessEqual(max(pil.size), 128)
+        self.assertEqual(orig_size, (w, h))
 
     def test_preserves_small_image_under_limit(self):
         runner = _make_runner()
         arr = frames.next()
         h, w = arr.shape[:2]
-        pil = runner._image_to_pil(arr, max_size=max(w, h) + 100)
+        pil, orig_size = runner._image_to_pil(arr, max_size=max(w, h) + 100)
         self.assertEqual(pil.size, (w, h))
+        self.assertEqual(orig_size, (w, h))
 
     def test_rejects_invalid_type(self):
         with self.assertRaises(TypeError):
             _make_runner()._image_to_pil("not_an_image")
+
+
+class TestRescaleTrajectory(unittest.TestCase):
+
+    def test_noop_when_sizes_match(self):
+        traj = {"trajectory": [[100, 200], [300, 400]], "start_point": [100, 200], "end_point": [300, 400]}
+        result = RunnerAugmented._rescale_trajectory(traj, (640, 480), (640, 480))
+        self.assertEqual(result["trajectory"], [[100, 200], [300, 400]])
+
+    def test_scales_all_fields(self):
+        traj = {
+            "trajectory": [[100, 200], [300, 400]],
+            "start_point": [100, 200],
+            "end_point": [300, 400],
+            "reasoning": "test",
+        }
+        result = RunnerAugmented._rescale_trajectory(traj, (512, 384), (1024, 768))
+        self.assertAlmostEqual(result["trajectory"][0][0], 200.0)
+        self.assertAlmostEqual(result["trajectory"][0][1], 400.0)
+        self.assertAlmostEqual(result["trajectory"][1][0], 600.0)
+        self.assertAlmostEqual(result["trajectory"][1][1], 800.0)
+        self.assertAlmostEqual(result["start_point"][0], 200.0)
+        self.assertAlmostEqual(result["end_point"][1], 800.0)
+        self.assertEqual(result["reasoning"], "test")
+
+    def test_handles_missing_optional_fields(self):
+        traj = {"trajectory": [[10, 20], [30, 40]]}
+        result = RunnerAugmented._rescale_trajectory(traj, (500, 500), (1000, 1000))
+        self.assertAlmostEqual(result["trajectory"][0][0], 20.0)
+        self.assertNotIn("start_point", result)
 
 
 class TestExtractCameraImage(unittest.TestCase):
@@ -384,7 +418,9 @@ class TestGetPredTraj(unittest.TestCase):
     def test_successful_trajectory(self, mock_loc, _enc, mock_traj):
         mock_loc.return_value = {"pineapple": (100, 200), "bowl": (300, 400)}
         mock_traj.return_value = {
-            "trajectory": [[100, 200], [200, 300], [300, 400]]
+            "trajectory": [[100, 200], [200, 300], [300, 400]],
+            "start_point": [100, 200],
+            "end_point": [300, 400],
         }
         runner = _make_runner()
         runner.steps = [
@@ -396,10 +432,19 @@ class TestGetPredTraj(unittest.TestCase):
             }
         ]
         runner.step = 0
-        runner.get_pred_traj(frames.next())
+        img = frames.next()
+        orig_h, orig_w = img.shape[:2]
+        runner.get_pred_traj(img)
 
         self.assertIsNotNone(runner.pred_traj)
         self.assertEqual(len(runner.pred_traj["trajectory"]), 3)
+
+        if max(orig_w, orig_h) > 1024:
+            ratio = 1024 / max(orig_w, orig_h)
+            resized_w = int(orig_w * ratio)
+            sx = orig_w / resized_w
+            self.assertAlmostEqual(runner.pred_traj["trajectory"][0][0], 100 * sx, places=1)
+            self.assertAlmostEqual(runner.pred_traj["start_point"][0], 100 * sx, places=1)
 
 
 class TestBuildCallbacks(unittest.TestCase):
@@ -428,6 +473,201 @@ class TestBuildCallbacks(unittest.TestCase):
         cb(None, {}, 0)
 
 
+class TestRunTrajectory(unittest.TestCase):
+    """Tests for RunnerAugmented.run_trajectory across practice/collect/evaluate modes."""
+
+    def _make_trajectory_runner(self, tmpdir, **overrides):
+        runner = _make_runner(**overrides)
+        runner.failure_logdir = os.path.join(tmpdir, "failure")
+        runner.success_logdir = os.path.join(tmpdir, "success")
+        runner.eval_logdir = os.path.join(tmpdir, "eval")
+        os.makedirs(runner.failure_logdir, exist_ok=True)
+        os.makedirs(runner.success_logdir, exist_ok=True)
+        os.makedirs(runner.eval_logdir, exist_ok=True)
+
+        runner.horizon = 50
+        runner.obs_pointer = {}
+        runner.post_process = False
+        runner.full_cam_ids = ["c1", "c2", "c3", "c4", "c5", "c6"]
+
+        ctrl = MagicMock()
+        ctrl.get_name.return_value = "mock_ctrl"
+        ctrl.get_policy_name.return_value = "mock_policy"
+        ctrl.current_instruction = "test instruction"
+        ctrl.open_loop_horizon = 10
+        runner.controller = ctrl
+
+        env = MagicMock()
+        runner.env = env
+
+        return runner
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_practice_mode_no_save(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.run_trajectory("practice")
+
+            mock_run.assert_called_once()
+            kwargs = mock_run.call_args[1]
+            self.assertIsNone(kwargs["recording_folderpath"])
+            self.assertIsNone(kwargs["save_filepath"])
+            self.assertFalse(runner.traj_running)
+            self.assertEqual(runner.obs_pointer, {})
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_collect_mode_creates_dirs_and_saves(self, mock_run):
+        mock_run.return_value = {"success": False}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.run_trajectory("collect")
+
+            mock_run.assert_called_once()
+            kwargs = mock_run.call_args[1]
+            self.assertIsNotNone(kwargs["recording_folderpath"])
+            self.assertIsNotNone(kwargs["save_filepath"])
+            self.assertTrue(kwargs["save_filepath"].endswith("trajectory.h5"))
+
+            save_dir = os.path.dirname(kwargs["save_filepath"])
+            self.assertTrue(os.path.isdir(save_dir))
+            self.assertTrue(os.path.isdir(kwargs["recording_folderpath"]))
+
+            instr_path = os.path.join(save_dir, "instruction.txt")
+            self.assertTrue(os.path.isfile(instr_path))
+            with open(instr_path) as f:
+                self.assertEqual(f.read(), "test instruction")
+
+            policy_path = os.path.join(save_dir, "policy.md")
+            self.assertTrue(os.path.isfile(policy_path))
+
+    @patch("eva.runner_augmented.shutil.move")
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_collect_success_moves_to_success_dir(self, mock_run, mock_move):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.run_trajectory("collect")
+
+            mock_move.assert_called_once()
+            src, dst = mock_move.call_args[0]
+            self.assertIn("failure", src)
+            self.assertIn("success", dst)
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_evaluate_mode(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.run_trajectory("evaluate")
+
+            kwargs = mock_run.call_args[1]
+            self.assertIn("eval", kwargs["save_filepath"])
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_obs_transform_passed_when_annotated(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir, use_annotated_camera=True)
+            runner.run_trajectory("practice")
+
+            kwargs = mock_run.call_args[1]
+            self.assertIsNotNone(kwargs["obs_transform"])
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_obs_transform_none_when_not_annotated(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir, use_annotated_camera=False)
+            runner.run_trajectory("practice")
+
+            kwargs = mock_run.call_args[1]
+            self.assertIsNone(kwargs["obs_transform"])
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_analysis_callbacks_when_steps_present(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.steps = [{"step": "pick", "manipulating_object": "a",
+                             "target_related_object": "b", "target_location": "c"}]
+            runner.run_trajectory("practice")
+
+            kwargs = mock_run.call_args[1]
+            self.assertIsNotNone(kwargs["analysis_fn"])
+            self.assertIsNotNone(kwargs["on_analysis_complete"])
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_no_analysis_callbacks_when_no_steps(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.steps = []
+            runner.run_trajectory("practice")
+
+            kwargs = mock_run.call_args[1]
+            self.assertIsNone(kwargs["analysis_fn"])
+            self.assertIsNone(kwargs["on_analysis_complete"])
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_plan_freq_and_max_plan_count_forwarded(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.plan_freq = 7
+            runner.max_plan_count = 3
+            runner.run_trajectory("practice")
+
+            kwargs = mock_run.call_args[1]
+            self.assertEqual(kwargs["plan_freq"], 7)
+            self.assertEqual(kwargs["max_plan_count"], 3)
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_collect_mode_requires_six_cameras(self, mock_run):
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            runner.full_cam_ids = ["c1", "c2"]
+            with self.assertRaises(ValueError):
+                runner.run_trajectory("collect")
+
+    @patch("eva.runner_augmented.run_trajectory_augmented")
+    def test_controller_without_instruction_attr(self, mock_run):
+        """Controller without current_instruction should not cause errors."""
+        mock_run.return_value = {"success": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = self._make_trajectory_runner(tmpdir)
+            del runner.controller.current_instruction
+            del runner.controller.open_loop_horizon
+            runner.run_trajectory("practice")
+            mock_run.assert_called_once()
+
+
+class TestGetPredTrajSavesImage(unittest.TestCase):
+
+    @patch("eva.runner_augmented.add_arrow")
+    @patch("eva.runner_augmented.query_trajectory")
+    @patch("eva.runner_augmented.encode_pil_image", return_value="encoded")
+    @patch("eva.runner_augmented.query_target_location")
+    def test_saves_trajectory_image(self, mock_loc, _enc, mock_traj, mock_arrow):
+        mock_loc.return_value = {"cup": (10, 20), "plate": (30, 40)}
+        mock_traj.return_value = {"trajectory": [[10, 20], [30, 40]]}
+        fake_img = Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8))
+        mock_arrow.return_value = fake_img
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = _make_runner(save_trajectory_img_dir=tmpdir)
+            runner.steps = [
+                {"step": "move cup to plate", "manipulating_object": "cup",
+                 "target_related_object": "plate", "target_location": "on plate"}
+            ]
+            runner.step = 0
+            runner.get_pred_traj(np.zeros((64, 64, 3), dtype=np.uint8))
+
+            expected_path = os.path.join(tmpdir, "00000_trajectory.jpg")
+            self.assertTrue(os.path.isfile(expected_path))
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — real API calls for trajectory queries
 # ---------------------------------------------------------------------------
@@ -453,19 +693,39 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
     Skipped automatically when API keys or ``google-genai`` are missing.
     """
 
-    def _make_obs(self):
-        """Build an observation dict with real camera images."""
+    def _load_frame(self, camera, idx):
+        """Load a specific frame by index from the test_frames directory."""
+        path = os.path.join(TEST_FRAMES_DIR, camera, f"{idx:03d}.jpg")
+        return np.array(Image.open(path).convert("RGB"), dtype=np.uint8)
+
+    def _make_obs(self, frame_idx=None):
+        """Build an observation dict with real camera images.
+
+        Args:
+            frame_idx: If given, loads this exact frame index from each camera
+                so the saved images match the source frames. If None, falls
+                back to the global FrameLoader (for backward compat).
+        """
+        if frame_idx is not None:
+            return {
+                "image": {
+                    "varied_camera_1_26368109": self._load_frame("varied_camera_1", frame_idx),
+                    "hand_camera_14436910": self._load_frame("hand_camera", frame_idx),
+                    "varied_camera_2_25455306": self._load_frame("varied_camera_2", frame_idx),
+                },
+            }
         return {
             "image": {
-                "26368109": frames.next(camera="varied_camera_1"),
-                "14436910": frames.next(camera="hand_camera"),
-                "25455306": frames.next(camera="varied_camera_2"),
+                "varied_camera_1_26368109": frames.next(camera="varied_camera_1"),
+                "hand_camera_14436910": frames.next(camera="hand_camera"),
+                "varied_camera_2_25455306": frames.next(camera="varied_camera_2"),
             },
         }
 
     SAVE_DIR = os.path.join(
         os.path.dirname(__file__), os.pardir, "data", "test_traj"
     )
+    INSTRUCTION_CACHE_PATH = os.path.join(SAVE_DIR, "instruction_cache.json")
 
     def test_full_pipeline_with_analysis_loop(self):
         """Preprocess instruction then run the analysis scheduling loop.
@@ -477,22 +737,33 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
         Saves trajectory images and a JSON cache under data/test_traj/.
         """
         from openai import OpenAI
-        from eva.detectors.traj_vis_utils import add_arrow
 
         # -- Set up output directory --
         run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         out_dir = os.path.join(self.SAVE_DIR, run_id)
         os.makedirs(out_dir, exist_ok=True)
 
+        plan_freq = 10
+        num_plans = frames._max_index // plan_freq
+
+        # -- Load shared instruction cache --
+        os.makedirs(self.SAVE_DIR, exist_ok=True)
+        if os.path.exists(self.INSTRUCTION_CACHE_PATH):
+            with open(self.INSTRUCTION_CACHE_PATH) as f:
+                instruction_cache = json.load(f)
+        else:
+            instruction_cache = {}
+
         runner = _make_runner(
             openai_client=OpenAI(),
             gpt_model="gpt-4o-mini",
             gemini_model="gemini-robotics-er-1.5-preview",
-            plan_freq=15,
-            max_plan_count=5,
+            plan_freq=plan_freq,
+            max_plan_count=num_plans,
         )
+        runner.instruction_cache = instruction_cache
 
-        # -- Step 1: real instruction preprocessing (OpenAI) --
+        # -- Step 1: instruction preprocessing (uses cache if available) --
         instruction = "place the pineapple in the bowl"
         runner.preprocess_instruction(instruction)
         self.assertGreater(len(runner.steps), 0, "Should extract at least one step")
@@ -501,71 +772,47 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
         self.assertIn("target_related_object", step_data)
         self.assertIn("target_location", step_data)
 
-        # Save preprocessing cache
+        # Persist instruction cache back to disk
+        with open(self.INSTRUCTION_CACHE_PATH, "w") as f:
+            json.dump(runner.instruction_cache, f, indent=2)
+
         cache = {
             "instruction": instruction,
             "steps": runner.steps,
             "run_id": run_id,
             "gpt_model": "gpt-4o-mini",
             "gemini_model": "gemini-robotics-er-1.5-preview",
-            "plan_freq": runner.plan_freq,
-            "max_plan_count": runner.max_plan_count,
+            "plan_freq": plan_freq,
+            "max_plan_count": num_plans,
             "trajectories": [],
         }
 
         # -- Step 2: build real analysis callbacks --
-        analysis_fn = runner._build_analysis_fn()
+        trajectory_log = []
+        analysis_fn = runner._build_analysis_fn(
+            run_save_dir=out_dir,
+            trajectory_log=trajectory_log,
+        )
         on_analysis_complete = runner._build_on_analysis_complete()
 
         # -- Step 3: simulate the run_trajectory_augmented scheduling loop --
-        plan_freq = runner.plan_freq
-        max_plan_count = runner.max_plan_count
+        # Each iteration represents one planning interval (step 0, plan_freq, 2*plan_freq, ...)
         plan_count = 0
         trajectories = []
 
-        num_simulation_steps = plan_freq + 1  # triggers analysis at step 0 and step plan_freq
-        for num_steps in range(num_simulation_steps):
-            obs = self._make_obs()
+        for plan_idx in range(num_plans):
+            num_steps = plan_idx * plan_freq
+            obs = self._make_obs(frame_idx=num_steps)
 
-            should_analyse = (
-                analysis_fn is not None
-                and plan_count < max_plan_count
-                and (num_steps == 0 or (plan_freq > 0 and num_steps % plan_freq == 0))
-            )
-            if should_analyse:
-                # Save the raw input frame before analysis
-                cam_img = obs["image"]["26368109"]
-                frame_path = os.path.join(out_dir, f"frame_step_{num_steps:03d}.jpg")
-                Image.fromarray(cam_img).save(frame_path)
+            result = analysis_fn(obs, num_steps, plan_count)
+            plan_count += 1
+            if on_analysis_complete is not None:
+                on_analysis_complete(result, obs, num_steps)
 
-                # Point runner's built-in save path at this step
-                traj_img_path = os.path.join(out_dir, f"traj_step_{num_steps:03d}.jpg")
-                runner.save_trajectory_img_path = traj_img_path
+            if result is not None and "trajectory" in result:
+                trajectories.append((num_steps, result))
 
-                result = analysis_fn(obs, num_steps, plan_count)
-                plan_count += 1
-                if on_analysis_complete is not None:
-                    on_analysis_complete(result, obs, num_steps)
-
-                if result is not None and "trajectory" in result:
-                    trajectories.append((num_steps, result))
-
-                    # If runner didn't save (e.g. image conversion), draw and save manually
-                    if not os.path.exists(traj_img_path):
-                        pts = [tuple(p) for p in result["trajectory"]]
-                        if len(pts) >= 2:
-                            pil_img = Image.fromarray(cam_img).convert("RGB")
-                            annotated = add_arrow(pil_img, pts, color="red", line_width=3)
-                            annotated.convert("RGB").save(traj_img_path)
-
-                    # Append to cache
-                    cache["trajectories"].append({
-                        "step_num": num_steps,
-                        "plan_count": plan_count,
-                        "frame_file": f"frame_step_{num_steps:03d}.jpg",
-                        "traj_image_file": f"traj_step_{num_steps:03d}.jpg",
-                        "trajectory": result,
-                    })
+        cache["trajectories"] = trajectory_log
 
         # -- Step 4: save full cache --
         cache_path = os.path.join(out_dir, "cache.json")
@@ -593,7 +840,14 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
             any(f.startswith("traj_step_") for f in saved_files),
             "At least one trajectory image should be saved",
         )
+        overlay_files = [f for f in saved_files if f.startswith("overlay_step_")]
+        self.assertEqual(
+            len(overlay_files), num_plans,
+            f"Should have one overlay image per plan ({num_plans}), "
+            f"got {len(overlay_files)}",
+        )
         print(f"\n  Saved {len(saved_files)} files to {out_dir}")
+        print(f"  Including {len(overlay_files)} overlay images")
 
 
 if __name__ == "__main__":

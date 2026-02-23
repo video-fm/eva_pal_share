@@ -23,8 +23,8 @@ Version:
 '''
 @dataclass
 class Pi0PolicyConfig:
-    remote_host: str = "10.102.212.31"
-    remote_port: int = 8000
+    remote_host: str = "10.102.245.84"
+    remote_port: int = 8001
     action_space: str = "joint_velocity"
     gripper_action_space: str = "position"
     left_camera_id: str = params.varied_camera_1_id

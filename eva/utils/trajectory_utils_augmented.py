@@ -82,14 +82,12 @@ def run_trajectory_augmented(
         control_timestamps = {"step_start": time_ms()}
 
         obs = env.get_observation()
-        if obs_transform is not None:
-            obs = obs_transform(obs)
         if obs_pointer is not None:
             obs_pointer.update(obs)
         obs["controller_info"] = controller_info
         obs["timestamp"]["skip_action"] = skip_action
 
-        # ---- Analysis / replanning hook ----
+        # ---- Analysis / replanning hook (runs on raw obs) ----
         should_analyse = (
             analysis_fn is not None
             and plan_count < max_plan_count
@@ -105,6 +103,10 @@ def run_trajectory_augmented(
 
             if on_analysis_complete is not None:
                 on_analysis_complete(analysis_result, obs, num_steps)
+
+        # ---- Apply obs transform after analysis so overlay reflects latest trajectory ----
+        if obs_transform is not None:
+            obs = obs_transform(obs)
 
         # ---- Policy forward pass ----
         control_timestamps["policy_start"] = time_ms()

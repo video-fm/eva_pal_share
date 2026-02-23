@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PIL import Image
 import io
+import numpy as np
 import base64
 
 from eva.detectors.traj_vis_utils import add_arrow, get_image_resized
@@ -150,6 +151,21 @@ You are a spatial reasoning and motion planning assistant for tabletop manipulat
   }}
 """
 
+step_completion_prompt_template = """
+You are a spatial reasoning and motion planning assistant for tabletop manipulation. 
+
+We are currently performing this step in the task: {task}.
+
+Based on the previous images and the current image, please determine if the step is complete.
+
+Return ONLY a single valid JSON object (no extra text). Use this format:
+{{
+  "reasoning": "...",
+  "is_complete": true/false
+}}
+"""
+
+
 def encode_image(img_path: str) -> str:
     """Convert image file to base64 string."""
     with open(img_path, "rb") as f:
@@ -211,7 +227,6 @@ def query_target_objects(client: OpenAI, caption: str, model: str = "gpt-4o-mini
 
 
 def query_target_location(img, queries: list[str], model_name: str = "gemini-robotics-er-1.5-preview", visualize: bool = False) -> dict[str, tuple[float, float]]:
-
     
     point_prompt = textwrap.dedent(f"""\
     Get all points matching the following objects: {', '.join(queries)}. The label
@@ -245,6 +260,32 @@ def query_target_location(img, queries: list[str], model_name: str = "gemini-rob
         object_locations[obj_name] = (x, y)
     
     return object_locations
+
+def query_step_completion(
+  client: OpenAI, 
+  img_list, 
+  img_encoded_list, 
+  step: str, 
+  model_name: str = "gpt-4o-mini",
+  max_images: int = 3) -> dict:
+  
+    if len(img_list) > max_images:
+        indices = np.linspace(0, len(img_list) - 1, max_images, dtype=int)
+        img_list = [img_list[i] for i in indices]
+        img_encoded_list = [img_encoded_list[i] for i in indices]
+
+    prompt = step_completion_prompt_template.format(task=step)
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=200,
+    )
+    
+    text = response.choices[0].message.content.strip()
+    text = parse_json(text)
+    json_output = json.loads(text)
+    return json_output
 
 def query_trajectory(
     client: OpenAI,
