@@ -94,7 +94,7 @@ class KeyboardPi0:
         return self.get_current_controller().gripper_action_space
         
     def get_name(self):
-        return "pi0-keyboard-mixed"
+        return "keyboard-pi0-controller"
         
     def reset_state(self):
         """Reset both controllers and internal state"""

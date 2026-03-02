@@ -17,11 +17,12 @@ from eva.controllers.gello import Gello
 from eva.controllers.replayer import Replayer
 from eva.controllers.pi0_policy import Pi0Policy
 from eva.controllers.human_pi0 import DemoDiffusionPolicy
+from eva.controllers.keyboard_pi0 import KeyboardPi0
 
 # Active Perception Series
 from eva.controllers.policy import Policy # currently fixed as avg pooling aawr policy
 from eva.controllers.aawr import AAWRPolicy
-from eva.controllers.pi0_spacemouse import MixedController
+from eva.controllers.pi0_spacemouse import SpaceMousePi0
 from eva.controllers.aawr_pi0 import AAWRPi0Controller
 from eva.controllers.replay_pi0 import ReplayPi0Controller
 
@@ -134,7 +135,7 @@ class Runner:
                     f.write(self.controller.current_instruction)
                 yellow_print(f"Saved instruction to {instr_file}")
 
-        yellow_print("Saving policy name")
+        yellow_print("Saving policy name, if error please add get_policy_name() to the controller!")
         policy_name = self.controller.get_policy_name()
         with open(os.path.join(save_dir, f"policy.md"), "w") as f:
             f.write(f"# Policy\n\n{policy_name}")
@@ -263,6 +264,15 @@ class Runner:
             img = cv2.cvtColor(obs["image"][cam_id], cv2.COLOR_BGRA2RGB)
             gui_images.append(img)
         
+        # Optional: add depth camera feed
+        # depth_cam_ids = list(obs["depth"].keys())
+        # depth_cam_ids.sort()
+        # import numpy as np
+        # for cam_id in depth_cam_ids:
+        #     depth = np.nan_to_num(obs["depth"][cam_id])
+        #     img = cv2.cvtColor(depth, cv2.COLOR_BGRA2RGB)
+        #     gui_images.append(img)
+        # all_cam_ids.extend([id+"_depth" for id in depth_cam_ids])
 
         return gui_images, all_cam_ids
 
@@ -286,12 +296,7 @@ class Runner:
             yellow_print("Not traj mode")
             obs = self.env.read_cameras()[0]
         return obs
-    
-    def get_state(self):
-        # TODO check what is inside
-        obs = self.env.get_observation()
-        return obs
-        
+
     def get_robot_state(self): # Written by Tony
         state_dict, _ = self.env._robot.get_robot_state()
         return state_dict
@@ -310,7 +315,12 @@ class Runner:
         yellow_print("Setting controller:", controller)
         if controller is None:
             return
-        
+        # Avoid reopening SpaceMouse HID device (exclusive access)
+        # TODO: rewrite `run_eva_policy.py` to avoid this hack
+        if controller == "spacemouse" and isinstance(self.controller, SpaceMouse):
+            yellow_print("Controller already set to spacemouse\n=================\n")
+            return
+
         def update_action_spaces(action_space, gripper_action_space):
             yellow_print(f"RUNNER == Updating action spaces - Action: {action_space}, Gripper: {gripper_action_space} ==========")
             self.env.set_action_space(action_space)
@@ -342,12 +352,10 @@ class Runner:
         elif controller == "replay_pi0":
             kwargs['on_switch_callback'] = update_action_spaces
             self.controller = ReplayPi0Controller(**kwargs)
-        elif controller == "mixed":
-            #  TODO: rename after ddl
+        elif controller == "spacemouse_pi0":
             kwargs['on_switch_callback'] = update_action_spaces
-            self.controller = MixedController(**kwargs)
+            self.controller = SpaceMousePi0(**kwargs)
         elif controller == "keyboard_pi0":
-            from eva.controllers.keyboard_pi0 import KeyboardPi0
             kwargs['on_switch_callback'] = update_action_spaces
             self.controller = KeyboardPi0(**kwargs)
         else:

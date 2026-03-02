@@ -13,7 +13,7 @@ def main():
 
     total_rollouts = 3000
 
-    runner = load_runner(manager=False, controller='mixed', record_depth=False, record_pcd=False, post_process=True)
+    runner = load_runner(manager=False, controller='spacemouse_pi0', record_depth=False, record_pcd=False, post_process=True)
     # start with spacemouse 
     
     # Start interactive session

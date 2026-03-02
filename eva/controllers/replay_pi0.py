@@ -18,7 +18,7 @@ from eva.utils.misc_utils import blue_print
  Replayer Pi0 controller for EVA framework
 Author: Jie Wang
 Version:
-   2025-04-25: initiate from pi0-spacemouse mixed controller
+   2025-04-25: initiate from spacemouse_pi0
    2025-05-xx: added pineapple detection based switching
    2026-02-15: clean up for release
 '''
@@ -99,7 +99,7 @@ class ReplayPi0Controller:
         return self.get_current_controller().gripper_action_space
         
     def get_name(self):
-        return "pi0-replayer-mixed"
+        return "replay-pi0-controller"
         
     def reset_state(self):
         """Reset both controllers and internal state"""
