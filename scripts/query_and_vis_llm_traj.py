@@ -16,7 +16,7 @@ class Args:
     """Trajectory model version (0 or 1)."""
     model: str = "gpt-4o-mini"
     """OpenAI model for v1 (step extraction and trajectory)."""
-    gemini_model: str = "gemini-robotics-er-1.5-preview"
+    gemini_model: str = "gemini-robotics-er-1.6-preview"
     """Gemini model for object detection and trajectory."""
 
 

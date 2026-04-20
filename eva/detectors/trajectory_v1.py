@@ -377,7 +377,7 @@ def parse_json(json_output):
   return json_output
      
 
-def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-robotics-er-1.5-preview"):
+def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-robotics-er-1.6-preview"):
     default_config = types.GenerateContentConfig(
         temperature=0,
         thinking_config=types.ThinkingConfig(thinking_budget=100)
@@ -419,7 +419,7 @@ def query_target_objects(client: OpenAI, caption: str, model: str = "gpt-4o-mini
     return data
     
 
-def query_target_location(img, queries: list[str], model_name: str = "gemini-robotics-er-1.5-preview", visualize: bool = False) -> dict[str, tuple[float, float]]:
+def query_target_location(img, queries: list[str], model_name: str = "gemini-robotics-er-1.6-preview", visualize: bool = False) -> dict[str, tuple[float, float]]:
     
     point_prompt = textwrap.dedent(f"""\
     Get all points matching the following objects: {', '.join(queries)}. The label
@@ -457,7 +457,7 @@ def query_target_location(img, queries: list[str], model_name: str = "gemini-rob
 def query_step_completion(
   img_list,
   step: str,
-  model_name: str = "gemini-robotics-er-1.5-preview",
+  model_name: str = "gemini-robotics-er-1.6-preview",
   max_images: int = 3,
 ) -> dict:
 
@@ -561,7 +561,7 @@ def parse_args():
     
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="gpt-4o-mini")
-    p.add_argument("--gemini-model", default="gemini-robotics-er-1.5-preview")
+    p.add_argument("--gemini-model", default="gemini-robotics-er-1.6-preview")
     p.add_argument("--test-pipeline-dir", default="/home/jianih/research/STSG-ICL/data/ICL_VLA_small/test_traj_prediction")
     p.add_argument("--img-path", default=None)
     p.add_argument("--save-resized-img-path", default=None)

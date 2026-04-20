@@ -57,14 +57,18 @@ if __name__ == "__main__":
     parser.add_argument("--practice", action="store_true")
     parser.add_argument("--traj_version", type=int, choices=[0, 1], default=1)
     parser.add_argument("--model", default="gpt-4o-mini")
-    parser.add_argument("--gemini-model", default="gemini-robotics-er-1.5-preview")
+    parser.add_argument("--gemini-model", default="gemini-robotics-er-1.6-preview")
     parser.add_argument("--data-path", type=str, default="/home/franka/eva_jiani/data/test_traj")
     parser.add_argument("--instruction_cache_path", default=None)
     parser.add_argument("--max-plan-count", type=int, default=20,
                         help="Maximum number of replanning calls per trajectory")
     parser.add_argument("--no-overlay", action="store_true",
                         help="Disable trajectory overlay on model input (planning images are still saved)")
-    
+    parser.add_argument("--no-debug-per-frame", action="store_true",
+                        help="Disable per-env-step debug saving (overlay images + JSON + stitched MP4)")
+    parser.add_argument("--debug-video-fps", type=int, default=15,
+                        help="FPS for the stitched per-frame debug video (default: 15)")
+
     args = parser.parse_args()
     os.makedirs(args.data_path, exist_ok=True)
     if args.instruction_cache_path is None:
@@ -87,6 +91,8 @@ if __name__ == "__main__":
         gemini_model=args.gemini_model,
         save_trajectory_img_dir=args.data_path,
         max_plan_count=args.max_plan_count,
+        debug_per_frame=not args.no_debug_per_frame,
+        debug_video_fps=args.debug_video_fps,
     )
     runner.instruction_cache = instruction_cache
     runner.instruction_cache_path = args.instruction_cache_path

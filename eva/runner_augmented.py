@@ -48,11 +48,13 @@ class RunnerAugmented(Runner):
         use_annotated_camera=False,
         openai_client=None,
         gpt_model="gpt-4o-mini",
-        gemini_model="gemini-robotics-er-1.5-preview",
+        gemini_model="gemini-robotics-er-1.6-preview",
         plan_freq=10,
         max_plan_count=20,
         save_trajectory_img_dir=None,
         augment_camera_ids = ["varied_camera_1"],
+        debug_per_frame=True,
+        debug_video_fps=15,
         **kwargs,
     ):
         super().__init__(env, controller, **kwargs)
@@ -72,9 +74,11 @@ class RunnerAugmented(Runner):
         self.augment_camera_ids = [
             camera_string_to_id_dict.get(aid, aid) for aid in augment_camera_ids
         ]
-        
+
         self.plan_freq = plan_freq
         self.max_plan_count = max_plan_count
+        self.debug_per_frame = debug_per_frame
+        self.debug_video_fps = debug_video_fps
         
     def annotate_observation(self, obs):
         """
@@ -506,6 +510,109 @@ class RunnerAugmented(Runner):
             return self.pred_traj
         return analysis_fn
 
+    def _save_per_frame_debug(self, raw_obs, transformed_obs, annotated_ids, frame_idx, per_frame_dir, records):
+        """Save the raw + annotated left camera image for this env step plus JSON metadata.
+
+        Writes three files per frame into ``per_frame_dir``:
+          * ``frame_NNNNNN_raw.jpg``       — pre-annotation camera image
+          * ``frame_NNNNNN_annotated.jpg`` — exact image passed to the policy
+          * ``frame_NNNNNN.json``          — {frame_idx, step_index, instruction, trajectory, ...}
+        """
+        target_cam = None
+        for cam_id in annotated_ids:
+            cam_str = str(cam_id)
+            if "left" in cam_str and any(aid in cam_str for aid in self.augment_camera_ids):
+                target_cam = cam_id
+                break
+        if target_cam is None:
+            for cam_id in (transformed_obs.get("image") or {}):
+                cam_str = str(cam_id)
+                if "left" in cam_str and any(aid in cam_str for aid in self.augment_camera_ids):
+                    target_cam = cam_id
+                    break
+        if target_cam is None:
+            return
+
+        raw_img = (raw_obs.get("image") or {}).get(target_cam)
+        ann_img = (transformed_obs.get("image") or {}).get(target_cam)
+        if raw_img is None or ann_img is None:
+            return
+
+        raw_rgb = self._cam_img_to_rgb(raw_img)
+        ann_rgb = self._cam_img_to_rgb(ann_img)
+        raw_path = os.path.join(per_frame_dir, f"frame_{frame_idx:06d}_raw.jpg")
+        ann_path = os.path.join(per_frame_dir, f"frame_{frame_idx:06d}_annotated.jpg")
+        Image.fromarray(raw_rgb).save(raw_path, quality=85)
+        Image.fromarray(ann_rgb).save(ann_path, quality=85)
+
+        traj_pts = None
+        if self.pred_traj and "trajectory" in self.pred_traj:
+            traj_pts = [list(p) for p in self.pred_traj["trajectory"]]
+
+        meta = {
+            "frame_idx": frame_idx,
+            "step_index": self.step,
+            "step_description": self.steps[self.step]["step"] if self.steps and self.step < len(self.steps) else None,
+            "instruction": getattr(self.controller, "current_instruction", None),
+            "trajectory": traj_pts,
+            "end_point": self.current_end_point,
+            "annotated": target_cam in annotated_ids,
+            "camera": str(target_cam),
+        }
+        meta_path = os.path.join(per_frame_dir, f"frame_{frame_idx:06d}.json")
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+        records.append({
+            "frame_idx": frame_idx,
+            "raw": os.path.basename(raw_path),
+            "annotated": os.path.basename(ann_path),
+            "meta": os.path.basename(meta_path),
+            "trajectory": traj_pts,
+            "step_index": self.step,
+        })
+
+    def _stitch_debug_video(self, per_frame_dir, records, fps):
+        """Stitch per-frame raw|annotated side-by-side into debug.mp4.
+
+        Skipped silently on failure; the per-frame images remain available.
+        """
+        if not records:
+            return
+        try:
+            first_raw = cv2.imread(os.path.join(per_frame_dir, records[0]["raw"]))
+            first_ann = cv2.imread(os.path.join(per_frame_dir, records[0]["annotated"]))
+            if first_raw is None or first_ann is None:
+                return
+            h, w = first_ann.shape[:2]
+            # Resize raw to match annotated height if they differ.
+            if first_raw.shape[:2] != first_ann.shape[:2]:
+                first_raw = cv2.resize(first_raw, (w, h))
+            combined_w = w * 2
+            video_path = os.path.join(per_frame_dir, "..", "debug.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(video_path, fourcc, fps, (combined_w, h))
+            if not writer.isOpened():
+                yellow_print(f"[debug_per_frame] Failed to open VideoWriter for {video_path}")
+                return
+            for rec in records:
+                raw = cv2.imread(os.path.join(per_frame_dir, rec["raw"]))
+                ann = cv2.imread(os.path.join(per_frame_dir, rec["annotated"]))
+                if raw is None or ann is None:
+                    continue
+                if raw.shape[:2] != (h, w):
+                    raw = cv2.resize(raw, (w, h))
+                if ann.shape[:2] != (h, w):
+                    ann = cv2.resize(ann, (w, h))
+                side_by_side = np.hstack([raw, ann])
+                label = f"f{rec['frame_idx']:06d} step={rec['step_index']}"
+                cv2.putText(side_by_side, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                writer.write(side_by_side)
+            writer.release()
+            yellow_print(f"[debug_per_frame] Wrote debug video: {os.path.abspath(video_path)}")
+        except Exception as e:
+            yellow_print(f"[debug_per_frame] Video stitch failed: {e}")
+
     def _build_on_analysis_complete(self):
         """Return the post-analysis callback for run_trajectory_augmented."""
         def on_analysis_complete(analysis_result, obs, step_num):
@@ -517,6 +624,11 @@ class RunnerAugmented(Runner):
 
     def run_trajectory(self, mode, reset_robot=True, wait_for_controller=True):
         _logged_first = [False]
+        _frame_counter = [0]
+        _per_frame_records = []
+        # per_frame_dir is resolved after run_save_dir is computed below;
+        # it's mutable so the closure sees the updated path.
+        _per_frame_dir = [None]
 
         def _obs_transform(obs):
             transformed = self.annotate_observation(deepcopy(obs))
@@ -528,6 +640,18 @@ class RunnerAugmented(Runner):
                     f"[obs_transform] annotated={annotated_ids}, raw={raw_ids}"
                 )
                 _logged_first[0] = True
+
+            if self.debug_per_frame and _per_frame_dir[0] is not None:
+                self._save_per_frame_debug(
+                    raw_obs=obs,
+                    transformed_obs=transformed,
+                    annotated_ids=annotated_ids,
+                    frame_idx=_frame_counter[0],
+                    per_frame_dir=_per_frame_dir[0],
+                    records=_per_frame_records,
+                )
+                _frame_counter[0] += 1
+
             return transformed
 
         obs_transform = _obs_transform if self._use_annotated_camera else None
@@ -580,6 +704,10 @@ class RunnerAugmented(Runner):
         if self.save_trajectory_img_dir is not None:
             run_save_dir = os.path.join(self.save_trajectory_img_dir, traj_name)
             os.makedirs(run_save_dir, exist_ok=True)
+            if self.debug_per_frame:
+                _per_frame_dir[0] = os.path.join(run_save_dir, "per_frame")
+                os.makedirs(_per_frame_dir[0], exist_ok=True)
+                yellow_print(f"[debug_per_frame] Saving per-frame overlays to {_per_frame_dir[0]}")
 
         has_steps = bool(self.steps)
         analysis_fn = self._build_analysis_fn(
@@ -620,11 +748,15 @@ class RunnerAugmented(Runner):
                 "plan_freq": self.plan_freq,
                 "max_plan_count": self.max_plan_count,
                 "trajectories": trajectory_log,
+                "per_frame_count": len(_per_frame_records),
             }
             cache_path = os.path.join(run_save_dir, "cache.json")
             with open(cache_path, "w") as f:
                 json.dump(cache, f, indent=2)
             yellow_print(f"Saved trajectory cache to {cache_path}")
+
+        if self.debug_per_frame and _per_frame_dir[0] is not None and _per_frame_records:
+            self._stitch_debug_video(_per_frame_dir[0], _per_frame_records, self.debug_video_fps)
 
         if mode == "collect" and save_filepath is not None:
             if controller_info["success"]:

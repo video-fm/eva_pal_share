@@ -38,11 +38,13 @@ def init(
     horizon=None,
     use_annotated_camera=False,
     gpt_model="gpt-4o-mini",
-    gemini_model="gemini-robotics-er-1.5-preview",
+    gemini_model="gemini-robotics-er-1.6-preview",
     plan_freq=10,
     max_plan_count=20,
     save_trajectory_img_dir=None,
     augment_camera_ids=None,
+    debug_per_frame=True,
+    debug_video_fps=15,
 ):
     camera_kwargs = defaultdict(
         lambda: {"depth": record_depth, "pointcloud": record_pcd}
@@ -60,6 +62,8 @@ def init(
         max_plan_count=max_plan_count,
         save_trajectory_img_dir=save_trajectory_img_dir,
         augment_camera_ids=augment_camera_ids or ["varied_camera_1"],
+        debug_per_frame=debug_per_frame,
+        debug_video_fps=debug_video_fps,
     )
     return runner
 
@@ -72,7 +76,7 @@ def start_runner(
     horizon=None,
     use_annotated_camera=False,
     gpt_model="gpt-4o-mini",
-    gemini_model="gemini-robotics-er-1.5-preview",
+    gemini_model="gemini-robotics-er-1.6-preview",
     plan_freq=10,
     max_plan_count=20,
     save_trajectory_img_dir=None,

@@ -41,7 +41,7 @@ def parse_json(json_output):
   return json_output
      
 
-def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-robotics-er-1.5-preview"):
+def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-robotics-er-1.6-preview"):
     default_config = types.GenerateContentConfig(
         temperature=0,
         thinking_config=types.ThinkingConfig(thinking_budget=100)
@@ -60,7 +60,7 @@ def call_gemini_robotics_er(img, prompt, config=None, model_name= "gemini-roboti
     return parse_json(image_response.text)
 
 
-def query_target_trajectory(img, task: str, model_name: str = "gemini-robotics-er-1.5-preview", save_path: str = "points.jpg", visualize: bool = False) -> list[str]:
+def query_target_trajectory(img, task: str, model_name: str = "gemini-robotics-er-1.6-preview", save_path: str = "points.jpg", visualize: bool = False) -> list[str]:
 
     prompt = f"""
         Task: {task}
@@ -116,7 +116,7 @@ def parse_args():
 
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="gpt-4o-mini")
-    p.add_argument("--gemini-model", default="gemini-robotics-er-1.5-preview")
+    p.add_argument("--gemini-model", default="gemini-robotics-er-1.6-preview")
     p.add_argument("--test-pipeline-dir", default=default_traj_dir)
     p.add_argument("--save-location-img-file-name", default="points.jpg")
     p.add_argument("--img-path", default=default_img_path)

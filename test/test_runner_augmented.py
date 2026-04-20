@@ -757,7 +757,7 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
         runner = _make_runner(
             openai_client=OpenAI(),
             gpt_model="gpt-4o-mini",
-            gemini_model="gemini-robotics-er-1.5-preview",
+            gemini_model="gemini-robotics-er-1.6-preview",
             plan_freq=plan_freq,
             max_plan_count=num_plans,
         )
@@ -781,7 +781,7 @@ class TestTrajectoryQueryIntegration(unittest.TestCase):
             "steps": runner.steps,
             "run_id": run_id,
             "gpt_model": "gpt-4o-mini",
-            "gemini_model": "gemini-robotics-er-1.5-preview",
+            "gemini_model": "gemini-robotics-er-1.6-preview",
             "plan_freq": plan_freq,
             "max_plan_count": num_plans,
             "trajectories": [],
