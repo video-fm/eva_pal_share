@@ -4,13 +4,14 @@ from tqdm import tqdm
 import time
 from eva.runner_augmented import RunnerAugmented
 from eva.manager_augmented import load_runner
+from eva.controllers.pi0_policy import Pi0PolicyConfig
 import os
 import json
 # run_pi05.py -n 1 -c pi0_policy
-                
-def evaluate_policy(runner: RunnerAugmented, controller=None, n_traj=1, practice=False):
+
+def evaluate_policy(runner: RunnerAugmented, controller=None, controller_kwargs=None, n_traj=1, practice=False):
     print("Evaluating pi05 with controller:", controller)
-    runner.set_controller(controller) 
+    runner.set_controller(controller, **(controller_kwargs or {}))
     
     for _ in tqdm(range(n_traj), disable=(n_traj == 1)):
         current_instr = getattr(runner.controller, 'current_instruction', None)
@@ -68,6 +69,14 @@ if __name__ == "__main__":
                         help="Disable per-env-step debug saving (overlay images + JSON + stitched MP4)")
     parser.add_argument("--debug-video-fps", type=int, default=15,
                         help="FPS for the stitched per-frame debug video (default: 15)")
+    parser.add_argument("--remote-host", default=None,
+                        help="pi0 policy server host (overrides Pi0PolicyConfig default)")
+    parser.add_argument("--remote-port", type=int, default=None,
+                        help="pi0 policy server port (overrides Pi0PolicyConfig default)")
+    parser.add_argument("--open-loop-horizon", type=int, default=None,
+                        help="Number of actions to execute per policy query (overrides default 8)")
+    parser.add_argument("--instruction", default=None,
+                        help="Initial instruction to pass to the policy (otherwise interactive prompt)")
 
     args = parser.parse_args()
     os.makedirs(args.data_path, exist_ok=True)
@@ -96,8 +105,27 @@ if __name__ == "__main__":
     )
     runner.instruction_cache = instruction_cache
     runner.instruction_cache_path = args.instruction_cache_path
-    
-    evaluate_policy(runner, controller="pi0_policy", n_traj=args.n_traj, practice=args.practice)
+
+    pi0_cfg_overrides = {}
+    if args.remote_host is not None:
+        pi0_cfg_overrides["remote_host"] = args.remote_host
+    if args.remote_port is not None:
+        pi0_cfg_overrides["remote_port"] = args.remote_port
+    if args.open_loop_horizon is not None:
+        pi0_cfg_overrides["open_loop_horizon"] = args.open_loop_horizon
+    if args.instruction is not None:
+        pi0_cfg_overrides["instruction"] = args.instruction
+    controller_kwargs = {}
+    if pi0_cfg_overrides:
+        controller_kwargs["config"] = Pi0PolicyConfig(**pi0_cfg_overrides)
+
+    evaluate_policy(
+        runner,
+        controller="pi0_policy",
+        controller_kwargs=controller_kwargs,
+        n_traj=args.n_traj,
+        practice=args.practice,
+    )
 
     with open(args.instruction_cache_path, "w") as f:
         json.dump(runner.instruction_cache, f, indent=2)
