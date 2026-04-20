@@ -12,7 +12,7 @@ from eva.manager import load_runner
                 
 def evaluate_policy(runner: Runner, controller=None, n_traj=1, practice=False):
     print("Evaluating policy with controller:", controller)
-    if controller is not None and controller != "mixed":
+    if controller is not None and controller != "spacemouse_pi0":
         runner.set_controller(controller) 
     
         
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--n_traj", type=int, default=10)
     parser.add_argument("-c","--controller", default=None, choices=["occulus", "keyboard", "gello", "spacemouse" ,
                                                                     "policy", "pi0_policy",
-                                                                   "keyboard_pi0", "aawr_pi0", "mixed", "replay_pi0"])  
+                                                                   "keyboard_pi0", "aawr_pi0", "spacemouse_pi0", "replay_pi0"])  
     parser.add_argument("--practice", action="store_true")
     args = parser.parse_args()
 

@@ -7,7 +7,7 @@ from eva.manager import load_runner
 
 
 def collect_trajectory(runner: Runner, controller=None, n_traj=10, practice=False):
-    if controller is not None and controller != "mixed":
+    if controller is not None and controller != "spacemouse_pi0":
         runner.set_controller(controller) 
     runner.reset_robot()
     
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--n_traj", type=int, default=10)
     parser.add_argument("-c", "--controller", default=None, choices=["occulus", "keyboard", "gello", "spacemouse", \
-                                                                     "replay_pi0", "aawr_pi0", "pi0_policy", "mixed", "policy"])  
+                                                                     "replay_pi0", "aawr_pi0", "pi0_policy", "spacemouse_pi0", "policy"])  
     parser.add_argument("--practice", action="store_true")
     args = parser.parse_args()
 
